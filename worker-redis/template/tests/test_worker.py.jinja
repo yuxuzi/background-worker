@@ -1,0 +1,142 @@
+"""Worker behaviour, run in process against the in-memory queue. No broker and no real sleeps."""
+
+import asyncio
+
+import pytest
+
+from {{ package_name }}.jobs import Job
+from {{ package_name }}.queues import MemoryQueue
+from {{ package_name }}.worker import Worker, WorkerConfig
+
+FAST = WorkerConfig(
+    concurrency=2, job_timeout=1.0, max_attempts=3, backoff_base=0.001, poll_interval=0.01
+)
+
+
+def test_successful_job_runs_once_and_is_not_dead_lettered() -> None:
+    seen: list[str] = []
+
+    async def handler(job: Job) -> None:
+        seen.append(job.id)
+
+    async def case() -> None:
+        queue = MemoryQueue()
+        await queue.put(Job(kind="ok", id="job-1"))
+        await Worker(queue, {"ok": handler}, FAST).run(drain=True)
+        assert seen == ["job-1"]
+        assert await queue.dead_letters() == []
+        assert queue.pending() == 0
+
+    asyncio.run(case())
+
+
+def test_failed_job_is_retried_until_it_succeeds() -> None:
+    attempts_seen: list[int] = []
+
+    async def handler(job: Job) -> None:
+        attempts_seen.append(job.attempts)
+        if len(attempts_seen) == 1:
+            raise RuntimeError("flaky")
+
+    async def case() -> None:
+        queue = MemoryQueue()
+        await queue.put(Job(kind="flaky", id="job-2"))
+        await Worker(queue, {"flaky": handler}, FAST).run(drain=True)
+        assert attempts_seen == [0, 1]
+        assert await queue.dead_letters() == []
+
+    asyncio.run(case())
+
+
+def test_job_is_dead_lettered_after_max_attempts() -> None:
+    calls: list[str] = []
+
+    async def handler(job: Job) -> None:
+        calls.append(job.id)
+        raise RuntimeError("always")
+
+    async def case() -> None:
+        queue = MemoryQueue()
+        await queue.put(Job(kind="bad", id="job-3"))
+        await Worker(queue, {"bad": handler}, FAST).run(drain=True)
+        assert len(calls) == FAST.max_attempts
+        dead = await queue.dead_letters()
+        assert len(dead) == 1
+        assert dead[0].job.id == "job-3"
+        assert dead[0].job.attempts == FAST.max_attempts
+        assert dead[0].error == "RuntimeError: always"
+
+    asyncio.run(case())
+
+
+def test_attempt_that_runs_past_the_timeout_is_a_failure() -> None:
+    async def handler(job: Job) -> None:
+        await asyncio.Event().wait()  # never returns; the timeout cancels it
+
+    config = WorkerConfig(
+        concurrency=1, job_timeout=0.01, max_attempts=1, backoff_base=0.001, poll_interval=0.01
+    )
+
+    async def case() -> None:
+        queue = MemoryQueue()
+        await queue.put(Job(kind="slow", id="job-4"))
+        await Worker(queue, {"slow": handler}, config).run(drain=True)
+        dead = await queue.dead_letters()
+        assert [letter.error for letter in dead] == ["timed out after 0.01s"]
+
+    asyncio.run(case())
+
+
+def test_unknown_kind_is_dead_lettered_without_retry() -> None:
+    async def case() -> None:
+        queue = MemoryQueue()
+        await queue.put(Job(kind="missing", id="job-5"))
+        await Worker(queue, {}, FAST).run(drain=True)
+        dead = await queue.dead_letters()
+        assert len(dead) == 1
+        assert dead[0].job.attempts == 1
+        assert dead[0].error == "no handler for kind 'missing'"
+
+    asyncio.run(case())
+
+
+def test_shutdown_finishes_in_flight_jobs_and_leaves_the_rest_queued() -> None:
+    started: list[str] = []
+    finished: list[str] = []
+
+    async def handler(job: Job) -> None:
+        started.append(job.id)
+        if len(started) == 2:
+            both_started.set()
+        await asyncio.sleep(0.05)
+        finished.append(job.id)
+
+    async def case() -> None:
+        queue = MemoryQueue()
+        for index in range(5):
+            await queue.put(Job(kind="slow", id=f"job-{index}"))
+        worker = Worker(queue, {"slow": handler}, FAST)
+        task = asyncio.create_task(worker.run())
+        await both_started.wait()
+        worker.request_stop()
+        await task
+        assert len(started) == 2
+        assert sorted(finished) == sorted(started)
+        assert queue.pending() == 3
+
+    both_started = asyncio.Event()
+    asyncio.run(case())
+
+
+def test_config_rejects_values_that_would_hang_or_skip_attempts() -> None:
+    with pytest.raises(ValueError, match="concurrency"):
+        WorkerConfig(concurrency=0)
+    with pytest.raises(ValueError, match="max_attempts"):
+        WorkerConfig(max_attempts=0)
+    with pytest.raises(ValueError, match="poll_interval"):
+        WorkerConfig(poll_interval=0)
+
+
+def test_backoff_doubles_and_is_capped() -> None:
+    config = WorkerConfig(backoff_base=1.0, max_backoff=5.0)
+    assert [config.backoff(retry) for retry in (1, 2, 3, 4)] == [1.0, 2.0, 4.0, 5.0]

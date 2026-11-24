@@ -1,0 +1,90 @@
+# {{ project_name }}
+
+{{ description }}. The worker is the same as the in-memory profile. The queue is chosen by the
+`REDIS_URL` environment variable: when it is set, jobs go to Redis; when it is not, they stay in
+memory.
+
+Real Redis was not part of the tests. The Redis queue is tested against `fakeredis`, an in-process
+fake, so behaviour that differs between a real server and the fake is not covered.
+
+## Run the demo
+
+```bash
+uv sync
+uv run {{ project_name }}                                   # in memory
+REDIS_URL=redis://localhost:6379/0 uv run {{ project_name }}  # on a Redis you run yourself
+```
+
+The demo enqueues four jobs and runs them with two concurrent workers. It prints how many were
+dead-lettered: one greeting with a blank name, which fails validation on every attempt, and one
+job kind with no handler. With `REDIS_URL` set, the demo writes to that Redis, and the jobs it
+leaves in the dead-letter list stay there.
+
+## Configuration
+
+| Variable | Meaning |
+| --- | --- |
+| `REDIS_URL` | `redis://`, `rediss://`, or `unix://` URL. It may contain a password. The app reads it from the environment only and never logs it. Unset or blank means in memory. |
+
+Keep the URL out of the repository and out of shell history where you can: use a secret store or
+an environment file that is not committed (`.env` is git-ignored).
+
+## Use it
+
+```python
+import asyncio
+
+from redis.asyncio import Redis
+
+from {{ package_name }} import HANDLERS, Job, RedisQueue, Worker, WorkerConfig, install_signal_handlers
+
+
+async def main() -> None:
+    client = Redis.from_url("redis://localhost:6379/0")
+    queue = RedisQueue(client, name="jobs")
+    await queue.put(Job(kind="greet", payload={"name": "Ada"}))
+    worker = Worker(queue, HANDLERS, WorkerConfig(concurrency=4))
+    install_signal_handlers(worker)  # SIGINT and SIGTERM stop taking jobs; in-flight jobs finish
+    await worker.run()
+    await client.aclose()
+
+
+asyncio.run(main())
+```
+
+Several worker processes can share one `RedisQueue` name.
+
+## Behaviour
+
+- **Retries, timeouts, dead letters, and shutdown** work as in the in-memory profile. See the
+  `worker` profile of this pack for the rules; the same tests cover them with the in-memory queue.
+- **Queue:** `put` pushes a job to `<name>:ready`. `get` moves one to `<name>:processing` with
+  BLMOVE, and `ack` removes it. Dead letters go to `<name>:dead`.
+- **Crashes:** a job that was in `<name>:processing` when its worker died stays there. This
+  project does not requeue such jobs. Add a recovery step before you rely on it.
+- **Redis version:** `get` passes fractional seconds to BLMOVE, which needs Redis 6.0 or later.
+
+## Develop
+
+```bash
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy {{ package_name }} tests
+uv run pytest
+```
+
+The tests run offline. They use the in-memory queue for the worker and `fakeredis` for the Redis
+queue. They do not contact a Redis server.
+
+## Layout
+
+- `{{ package_name }}/jobs.py`, `queues.py`, `worker.py`, `handlers.py`: the same core as the
+  in-memory profile.
+- `{{ package_name }}/redis_queue.py`: `RedisQueue`, on the asyncio Redis client.
+- `{{ package_name }}/settings.py`: reads `REDIS_URL` from the environment.
+- `{{ package_name }}/app.py`: the demo entry point behind `uv run {{ project_name }}`.
+- `tests/`: pytest suite; worker tests use `MemoryQueue`, queue tests use `fakeredis`.
+- `CHANGELOG.md`: user-visible changes, kept under "Unreleased" until a release.
+
+See `AGENTS.md` for the rules coding agents follow in this project.

@@ -1,0 +1,21 @@
+"""REDIS_URL is read from the environment and is never echoed in an error."""
+
+import pytest
+
+from {{ package_name }}.settings import redis_url_from_env
+
+
+def test_unset_or_blank_means_no_redis() -> None:
+    assert redis_url_from_env({}) is None
+    assert redis_url_from_env({"REDIS_URL": "   "}) is None
+
+
+def test_a_url_with_a_password_is_returned_unchanged() -> None:
+    url = "rediss://:s3cret-pass@cache.example.test:6380/0"
+    assert redis_url_from_env({"REDIS_URL": url}) == url
+
+
+def test_an_unknown_scheme_is_refused_without_echoing_the_url() -> None:
+    with pytest.raises(ValueError, match="redis://") as error:
+        redis_url_from_env({"REDIS_URL": "http://:s3cret-pass@cache.example.test"})
+    assert "s3cret-pass" not in str(error.value)

@@ -1,0 +1,17 @@
+contract = 1
+id = "worker-redis"
+name = "Background worker with Redis"
+description = "The background worker with a Redis-backed queue, selected by REDIS_URL: jobs survive a restart and several worker processes can share one queue. Tests use an in-memory queue and fakeredis, not a real Redis server."
+version = "1"
+kind = "service"
+status = "stable"
+supported_python = ["3.11", "3.12", "3.13", "3.14", "3.15"]
+default_components = []
+optional_components = []
+dependencies = ["redis>=5"]
+questions = ["description", "author", "email", "python_version", "license"]
+lifecycle_commands = ["uv sync", "uv run ruff check .", "uv run ruff format --check .", "uv run mypy {package} tests", "uv run pytest"]
+security_posture = "REDIS_URL may hold a password, which the app reads only from the environment and never logs, prints, or puts in an error message. No secret is stored in the project. Job payloads are untrusted input; the example handler validates its payload, and the worker does not sandbox handlers. Dead letters keep exception messages, so handlers must not put secrets in them. The Redis connection is not checked for TLS: use a rediss:// URL when the network is untrusted. The tests do not contact a real Redis server, and the checks do not scan dependencies or code for security problems."
+
+[dependency_groups]
+dev = ["fakeredis>=2.41", "mypy>=1.11", "pytest>=8.0", "ruff>=0.6"]

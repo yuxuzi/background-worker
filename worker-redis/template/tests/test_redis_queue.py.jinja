@@ -1,0 +1,57 @@
+"""The Redis queue, tested against fakeredis (an in-process fake, not a real Redis server)."""
+
+import asyncio
+
+from fakeredis import FakeAsyncRedis
+
+from {{ package_name }}.jobs import Job
+from {{ package_name }}.redis_queue import RedisQueue
+
+
+def test_jobs_come_out_in_order_and_leave_processing_once_acked() -> None:
+    async def case() -> None:
+        client = FakeAsyncRedis()
+        queue = RedisQueue(client, name="test")
+        first = Job(kind="greet", payload={"name": "Ada"}, id="job-1")
+        second = Job(kind="greet", payload={"name": "Grace"}, id="job-2")
+        await queue.put(first)
+        await queue.put(second)
+
+        taken = await queue.get(timeout=0.01)
+        assert taken == first
+        assert await client.llen("test:processing") == 1
+        await queue.ack(taken)
+        assert await client.llen("test:processing") == 0
+
+        assert await queue.get(timeout=0.01) == second
+        await client.aclose()
+
+    asyncio.run(case())
+
+
+def test_get_returns_none_when_the_queue_is_empty() -> None:
+    async def case() -> None:
+        client = FakeAsyncRedis()
+        assert await RedisQueue(client, name="empty").get(timeout=0.01) is None
+        await client.aclose()
+
+    asyncio.run(case())
+
+
+def test_dead_letters_keep_the_job_and_its_error() -> None:
+    async def case() -> None:
+        client = FakeAsyncRedis()
+        queue = RedisQueue(client, name="dead")
+        job = Job(kind="greet", payload={"name": "  "}, id="job-3", attempts=3)
+        await queue.put(job)
+        taken = await queue.get(timeout=0.01)
+        assert taken is not None
+        await queue.dead_letter(taken, "ValueError: bad name")
+        await queue.ack(taken)
+
+        letters = await queue.dead_letters()
+        assert [(letter.job, letter.error) for letter in letters] == [(job, "ValueError: bad name")]
+        assert await client.llen("dead:processing") == 0
+        await client.aclose()
+
+    asyncio.run(case())

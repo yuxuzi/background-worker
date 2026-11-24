@@ -1,0 +1,76 @@
+# {{ project_name }}
+
+{{ description }}. Jobs wait in an in-memory queue, so this profile needs no broker and no
+secrets. Use the `worker-redis` profile of the same pack when jobs must outlive the process.
+
+## Run the demo
+
+```bash
+uv sync
+uv run {{ project_name }}
+```
+
+The demo enqueues four jobs, runs them with two concurrent workers, and prints how many were
+dead-lettered: one greeting with a blank name (it fails validation on every attempt) and one job
+kind with no handler.
+
+## Use it
+
+1. Write a handler: an `async def` that takes a `Job` and raises to signal a failed attempt.
+2. Put jobs on a queue, register handlers by kind, and run the worker:
+
+```python
+import asyncio
+
+from {{ package_name }} import HANDLERS, Job, MemoryQueue, Worker, WorkerConfig, install_signal_handlers
+
+
+async def main() -> None:
+    queue = MemoryQueue()
+    await queue.put(Job(kind="greet", payload={"name": "Ada"}))
+    worker = Worker(queue, HANDLERS, WorkerConfig(concurrency=4))
+    install_signal_handlers(worker)  # SIGINT and SIGTERM stop taking jobs; in-flight jobs finish
+    await worker.run()
+
+
+asyncio.run(main())
+```
+
+## Behaviour
+
+- **Concurrency:** `WorkerConfig.concurrency` consumer tasks take jobs from the queue.
+- **Timeouts:** `job_timeout` seconds per attempt. A timed-out attempt counts as a failure.
+- **Retries:** a job gets `max_attempts` attempts in total. Before retry `n` the worker waits
+  `backoff_base * 2 ** (n - 1)` seconds, capped at `max_backoff`.
+- **Dead letters:** after its last attempt, a job and its error go to `queue.dead_letters()`. A job
+  whose kind has no handler is dead-lettered at once.
+- **Shutdown:** a stop request ends the taking of new jobs. Jobs in flight finish, including any
+  retry wait they are in, and jobs not yet taken stay in the queue. A retry wait can be as long as
+  `max_backoff`, so set it with shutdown time in mind. A second signal does not force an exit.
+- **Logs:** one `event=<name> key="value"` line per event. Payloads are never logged. Dead letters
+  keep the exception message, which is not logged.
+
+## Develop
+
+```bash
+uv sync
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy {{ package_name }} tests
+uv run pytest
+```
+
+The tests run offline and in process. They inject a tiny `backoff_base` and do not sleep longer
+than 0.1 seconds.
+
+## Layout
+
+- `{{ package_name }}/jobs.py`: the `Job` and `DeadLetter` models and the `Handler` type.
+- `{{ package_name }}/queues.py`: the `Queue` protocol and `MemoryQueue`.
+- `{{ package_name }}/worker.py`: `Worker`, `WorkerConfig`, and signal handling.
+- `{{ package_name }}/handlers.py`: an example handler that validates its payload.
+- `{{ package_name }}/app.py`: the demo entry point behind `uv run {{ project_name }}`.
+- `tests/`: pytest suite for the worker and the handler.
+- `CHANGELOG.md`: user-visible changes, kept under "Unreleased" until a release.
+
+See `AGENTS.md` for the rules coding agents follow in this project.

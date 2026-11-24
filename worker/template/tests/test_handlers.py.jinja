@@ -1,0 +1,21 @@
+"""The example handler validates its untrusted payload."""
+
+import asyncio
+
+import pytest
+
+from {{ package_name }}.handlers import MAX_NAME_LENGTH, greet
+from {{ package_name }}.jobs import Job
+
+
+def test_greet_accepts_a_name() -> None:
+    asyncio.run(greet(Job(kind="greet", payload={"name": "Ada"})))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"name": 3}, {"name": "   "}, {"name": "x" * (MAX_NAME_LENGTH + 1)}],
+)
+def test_greet_rejects_bad_payloads(payload: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match=r"payload\.name"):
+        asyncio.run(greet(Job(kind="greet", payload=payload)))

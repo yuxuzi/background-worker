@@ -1,0 +1,52 @@
+# AGENTS.md
+
+Guidance for coding agents working in `{{ project_name }}`. `CLAUDE.md` imports this file.
+
+## Project
+
+{{ description }}. The package is `{{ package_name }}`, for Python {{ python_version }}+. The only
+runtime dependency is `redis`. `uv` is the only required tool: never use pip, virtualenv
+activation, or make.
+
+## Commands
+
+- Install or refresh the environment: `uv sync`
+- Run the demo: `uv run {{ project_name }}` (set `REDIS_URL` to use Redis)
+- Test: `uv run pytest`
+- Lint: `uv run ruff check .`
+- Format: `uv run ruff format .` (check only: `uv run ruff format --check .`)
+- Type-check: `uv run mypy {{ package_name }} tests`
+
+## Layout
+
+- `{{ package_name }}/jobs.py`: `Job` (a dataclass) and `DeadLetter`.
+- `{{ package_name }}/queues.py`: the `Queue` protocol and the in-memory `MemoryQueue`.
+- `{{ package_name }}/redis_queue.py`: `RedisQueue`, the Redis implementation of the same protocol.
+- `{{ package_name }}/worker.py`: the worker loop, `WorkerConfig`, and signal handling.
+- `{{ package_name }}/handlers.py`: example handlers; each validates its untrusted payload.
+- `{{ package_name }}/settings.py`: reads `REDIS_URL`. Never log or print the value.
+- `{{ package_name }}/app.py`: the demo entry point.
+- `tests/`: pytest suite. Worker tests use `MemoryQueue`; Redis tests use `fakeredis`. No test
+  contacts a real Redis server, and no sleep is longer than 0.1 seconds.
+- `CHANGELOG.md`: add an entry under "Unreleased" for every user-visible change.
+
+## Conventions
+
+- Type-annotate everything, including tests; mypy runs in strict mode and must stay clean.
+- Job payloads are untrusted input. Validate every field in a handler before use.
+- `REDIS_URL` may hold a password. Never log it, print it, or put it in an error message.
+- Never log a payload, and never put a secret in an exception message.
+- Keep new runtime dependencies out unless they are clearly needed; ask before adding one.
+
+## Testing
+
+- Add or update tests with every behavior change, including the failure path.
+- Inject small backoff values rather than sleeping; keep every test offline.
+- Before reporting work as done, run the test, lint, format, and type-check commands above and report
+  the real results.
+
+## Safety
+
+- Never read, print, or commit `.env` files, tokens, or other secrets.
+- Do not change dependency version bounds without asking first.
+- Prefer small, reviewable diffs.
