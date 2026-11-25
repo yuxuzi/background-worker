@@ -2,4 +2,6 @@ contract = 1
 id = "background-worker"
 name = "Background workers"
 description = "Python job workers with typed jobs, retries with backoff, graceful shutdown, and tests that need no broker."
-version = "1.0.0"
+version = "1.1.0"
+categories = ["worker"]
+keywords = ["worker", "jobs", "queue", "retry", "redis", "background"]

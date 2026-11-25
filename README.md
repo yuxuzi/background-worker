@@ -45,9 +45,13 @@ check. Neither profile stores a secret.
 ## Create a project
 
 ```bash
-uvx pytemplate-uv@latest create my-worker -p worker --template gh:yuxuzi/background-worker --template-ref v1.0.0 -y
-uvx pytemplate-uv@latest create my-worker -p worker-redis --template gh:yuxuzi/background-worker --template-ref v1.0.0 -y
+uvx pytemplate-uv@latest create my-worker -p worker -h yuxuzi/background-worker@v1.1.0 -y
+uvx pytemplate-uv@latest create my-worker -p worker-redis -h yuxuzi/background-worker@v1.1.0 -y
 ```
+
+`-h` (`--hub`, pytemplate-uv 3.5 or later) reads the commit and digest that
+[pytemplate-hub](https://yuxuzi.github.io/pytemplate-hub/) checked for this tag, and refuses the pack if
+anything changed. For CI or offline use, copy the fully pinned command from the pack's listing there.
 
 Then:
 
